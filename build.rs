@@ -11,9 +11,17 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let object = out_dir.join("menubar.o");
 
+    let clang_arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("x86_64") => "x86_64",
+        Ok("aarch64") => "arm64",
+        other => panic!("unsupported macOS target arch: {other:?}"),
+    };
+
     let mut command = Command::new("xcrun");
     command.args([
         "clang",
+        "-arch",
+        clang_arch,
         "-fobjc-arc",
         "-fmodules",
         "-fblocks",
