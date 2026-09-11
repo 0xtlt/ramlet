@@ -1,0 +1,413 @@
+#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
+
+extern char *ramlet_snapshot_tsv(void);
+extern void ramlet_string_free(char *value);
+
+static const NSInteger kMaximumVisibleApps = 18;
+static const CGFloat kStatusItemWidth = 92.0;
+static NSString *const kIncludeUnattributedDefaultsKey = @"includeUnattributedMemory";
+
+@interface RamletAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
+@property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSMenu *menu;
+@property(nonatomic, strong) NSTimer *timer;
+@end
+
+@implementation RamletAppDelegate
+
+- (NSArray<NSArray<NSString *> *> *)snapshotRows {
+    char *raw = ramlet_snapshot_tsv();
+    if (raw == NULL) {
+        return @[];
+    }
+
+    NSString *payload = [NSString stringWithUTF8String:raw];
+    ramlet_string_free(raw);
+    if (payload == nil) {
+        return @[];
+    }
+
+    NSMutableArray<NSArray<NSString *> *> *rows = [NSMutableArray array];
+    for (NSString *line in [payload componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        if (line.length > 0) {
+            [rows addObject:[line componentsSeparatedByString:@"\t"]];
+        }
+    }
+    return rows;
+}
+
+- (NSString *)memoryString:(unsigned long long)bytes {
+    return [NSByteCountFormatter stringFromByteCount:(long long)bytes
+                                          countStyle:NSByteCountFormatterCountStyleMemory];
+}
+
+- (NSImage *)symbol:(NSString *)name description:(NSString *)description {
+    NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:description];
+    if (image != nil) {
+        image.template = YES;
+        image = [image imageWithSymbolConfiguration:
+            [NSImageSymbolConfiguration configurationWithPointSize:13.0
+                                                             weight:NSFontWeightMedium]];
+    }
+    return image;
+}
+
+- (NSMenuItem *)informationalItem:(NSString *)title {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    item.enabled = NO;
+    return item;
+}
+
+- (NSStatusItem *)createStatusItem {
+    NSStatusItem *item = [[NSStatusBar systemStatusBar] statusItemWithLength:kStatusItemWidth];
+    item.button.image = [self symbol:@"memorychip" description:@"Ramlet"];
+    item.button.imagePosition = NSImageLeft;
+    item.button.font = [NSFont monospacedDigitSystemFontOfSize:13.0 weight:NSFontWeightRegular];
+    return item;
+}
+
+- (BOOL)includeUnattributedMemory {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:kIncludeUnattributedDefaultsKey] == nil) {
+        return YES;
+    }
+    return [defaults boolForKey:kIncludeUnattributedDefaultsKey];
+}
+
+- (unsigned long long)displayedBytesFromMeta:(NSArray<NSString *> *)meta {
+    unsigned long long used = strtoull(meta[1].UTF8String, NULL, 10);
+    if ([self includeUnattributedMemory]) {
+        return used;
+    }
+
+    unsigned long long total = strtoull(meta[2].UTF8String, NULL, 10);
+    unsigned long long appFootprint = strtoull(meta[6].UTF8String, NULL, 10);
+    unsigned long long services = strtoull(meta[7].UTF8String, NULL, 10);
+    return MIN(appFootprint + services, total);
+}
+
+- (void)updateStatusFromRows:(NSArray<NSArray<NSString *> *> *)rows {
+    if (rows.count == 0 || rows.firstObject.count < 8) {
+        self.statusItem.button.title = @" —";
+        self.statusItem.button.toolTip = @"Ramlet — mesure indisponible";
+        return;
+    }
+
+    NSArray<NSString *> *meta = rows.firstObject;
+    unsigned long long used = strtoull(meta[1].UTF8String, NULL, 10);
+    unsigned long long total = strtoull(meta[2].UTF8String, NULL, 10);
+    unsigned long long displayed = [self displayedBytesFromMeta:meta];
+    NSString *displayedText = [self memoryString:displayed];
+    NSString *totalText = [self memoryString:total];
+    self.statusItem.button.title = [NSString stringWithFormat:@" %@", displayedText];
+    if ([self includeUnattributedMemory]) {
+        self.statusItem.button.toolTip = [NSString stringWithFormat:
+            @"Ramlet — %@ utilisés sur %@ de mémoire unifiée",
+            displayedText,
+            totalText];
+    } else {
+        self.statusItem.button.toolTip = [NSString stringWithFormat:
+            @"Ramlet — %@ attribués aux apps et services sur %@ (%@ utilisés au total)",
+            displayedText,
+            totalText,
+            [self memoryString:used]];
+    }
+}
+
+- (void)refreshStatus:(NSTimer *)timer {
+    (void)timer;
+    [self updateStatusFromRows:[self snapshotRows]];
+}
+
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    NSArray<NSArray<NSString *> *> *rows = [self snapshotRows];
+    [self updateStatusFromRows:rows];
+    [menu removeAllItems];
+
+    if (rows.count == 0 || rows.firstObject.count < 10) {
+        [menu addItem:[self informationalItem:@"Mesure mémoire indisponible"]];
+        [menu addItem:NSMenuItem.separatorItem];
+        [self addActionsToMenu:menu];
+        return;
+    }
+
+    NSArray<NSString *> *meta = rows.firstObject;
+    unsigned long long used = strtoull(meta[1].UTF8String, NULL, 10);
+    unsigned long long total = strtoull(meta[2].UTF8String, NULL, 10);
+    unsigned long long compressed = strtoull(meta[3].UTF8String, NULL, 10);
+    unsigned long long wired = strtoull(meta[4].UTF8String, NULL, 10);
+    unsigned long long swap = strtoull(meta[5].UTF8String, NULL, 10);
+    unsigned long long appFootprintBytes = strtoull(meta[6].UTF8String, NULL, 10);
+    unsigned long long serviceBytes = strtoull(meta[7].UTF8String, NULL, 10);
+
+    BOOL includesUnattributed = [self includeUnattributedMemory];
+    unsigned long long displayed = [self displayedBytesFromMeta:meta];
+    NSString *summaryLabel = includesUnattributed ? @"utilisés" : @"attribués";
+    NSMenuItem *summary = [self informationalItem:[NSString stringWithFormat:
+        @"%@ %@ sur %@",
+        [self memoryString:displayed],
+        summaryLabel,
+        [self memoryString:total]]];
+    summary.image = [self symbol:@"memorychip.fill" description:@"Mémoire unifiée"];
+    [menu addItem:summary];
+    [menu addItem:[self informationalItem:[NSString stringWithFormat:
+        @"Compressée %@  ·  Câblée %@  ·  Swap %@",
+        [self memoryString:compressed],
+        [self memoryString:wired],
+        [self memoryString:swap]]]];
+    [menu addItem:NSMenuItem.separatorItem];
+
+    NSInteger visibleApps = 0;
+    unsigned long long hiddenAppBytes = 0;
+    NSInteger hiddenAppCount = 0;
+    for (NSUInteger index = 1; index < rows.count; index++) {
+        NSArray<NSString *> *row = rows[index];
+        if (row.count < 5 || ![row[0] isEqualToString:@"APP"]) {
+            continue;
+        }
+
+        unsigned long long bytes = strtoull(row[1].UTF8String, NULL, 10);
+        if (bytes < 16ULL * 1024ULL * 1024ULL) {
+            hiddenAppBytes += bytes;
+            hiddenAppCount += 1;
+            continue;
+        }
+        if (visibleApps >= kMaximumVisibleApps) {
+            hiddenAppBytes += bytes;
+            hiddenAppCount += 1;
+            continue;
+        }
+
+        NSString *bundlePath = row[3];
+        NSString *name = row[4];
+        NSString *title = [NSString stringWithFormat:@"%@  ·  %@", name, [self memoryString:bytes]];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        item.enabled = YES;
+        item.toolTip = [NSString stringWithFormat:@"%@ processus agrégés", row[2]];
+
+        NSImage *icon = [[[NSWorkspace sharedWorkspace] iconForFile:bundlePath] copy];
+        icon.size = NSMakeSize(18.0, 18.0);
+        item.image = icon;
+        [menu addItem:item];
+        visibleApps += 1;
+    }
+
+    if (hiddenAppCount > 0) {
+        NSMenuItem *otherApps = [self informationalItem:[NSString stringWithFormat:
+            @"%ld autres applications  ·  %@",
+            (long)hiddenAppCount,
+            [self memoryString:hiddenAppBytes]]];
+        otherApps.image = [self symbol:@"square.stack.3d.up.fill" description:@"Autres applications"];
+        [menu addItem:otherApps];
+    }
+
+    NSMenuItem *services = [self informationalItem:[NSString stringWithFormat:
+        @"macOS et services  ·  %@", [self memoryString:serviceBytes]]];
+    services.image = [self symbol:@"gearshape.2.fill" description:@"Services système"];
+    [menu addItem:services];
+
+    unsigned long long attributedBytes = appFootprintBytes + serviceBytes;
+    unsigned long long unattributedBytes = used > attributedBytes ? used - attributedBytes : 0;
+    NSMenuItem *unattributed = [self informationalItem:[NSString stringWithFormat:
+        @"Caches et mémoire non attribuée  ·  ≈ %@", [self memoryString:unattributedBytes]]];
+    unattributed.image = [self symbol:@"internaldrive.fill" description:@"Caches et mémoire non attribuée"];
+    unattributed.toolTip = @"Cache fichiers, mémoire partagée, GPU et allocations que macOS ne rattache pas proprement à une application.";
+    [menu addItem:unattributed];
+
+    NSMenuItem *cacheToggle = [[NSMenuItem alloc] initWithTitle:@"Inclure caches et mémoire non attribuée"
+                                                        action:@selector(toggleUnattributedMemory:)
+                                                 keyEquivalent:@""];
+    cacheToggle.target = self;
+    cacheToggle.enabled = YES;
+    cacheToggle.state = includesUnattributed ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:cacheToggle];
+
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *note = [self informationalItem:@"Empreinte physique par app · GPU inclus lorsqu’attribuable"];
+    note.toolTip = @"macOS ne publie pas une ventilation complète de la mémoire GPU unifiée par application.";
+    [menu addItem:note];
+    [menu addItem:NSMenuItem.separatorItem];
+    [self addActionsToMenu:menu];
+}
+
+- (void)addActionsToMenu:(NSMenu *)menu {
+    NSMenuItem *refresh = [[NSMenuItem alloc] initWithTitle:@"Actualiser maintenant"
+                                                    action:@selector(refreshNow:)
+                                             keyEquivalent:@"r"];
+    refresh.target = self;
+    refresh.image = [self symbol:@"arrow.clockwise" description:@"Actualiser"];
+    [menu addItem:refresh];
+
+    NSMenuItem *activity = [[NSMenuItem alloc] initWithTitle:@"Ouvrir Moniteur d’activité"
+                                                     action:@selector(openActivityMonitor:)
+                                              keyEquivalent:@""];
+    activity.target = self;
+    activity.image = [self symbol:@"waveform.path.ecg.rectangle" description:@"Moniteur d’activité"];
+    [menu addItem:activity];
+
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quitter Ramlet"
+                                                 action:@selector(quit:)
+                                          keyEquivalent:@"q"];
+    quit.target = self;
+    [menu addItem:quit];
+}
+
+- (void)refreshNow:(id)sender {
+    (void)sender;
+    [self updateStatusFromRows:[self snapshotRows]];
+}
+
+- (void)toggleUnattributedMemory:(NSMenuItem *)sender {
+    BOOL nextValue = ![self includeUnattributedMemory];
+    [NSUserDefaults.standardUserDefaults setBool:nextValue
+                                          forKey:kIncludeUnattributedDefaultsKey];
+    sender.state = nextValue ? NSControlStateValueOn : NSControlStateValueOff;
+    [self refreshStatus:nil];
+}
+
+- (void)openActivityMonitor:(id)sender {
+    (void)sender;
+    NSURL *url = [NSURL fileURLWithPath:@"/System/Applications/Utilities/Activity Monitor.app"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)quit:(id)sender {
+    (void)sender;
+    [NSApp terminate:nil];
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    (void)notification;
+    self.statusItem = [self createStatusItem];
+
+    self.menu = [[NSMenu alloc] initWithTitle:@"Ramlet"];
+    self.menu.autoenablesItems = NO;
+    self.menu.delegate = self;
+    self.statusItem.menu = self.menu;
+
+    [self refreshStatus:nil];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:15.0
+                                                  target:self
+                                                selector:@selector(refreshStatus:)
+                                                userInfo:nil
+                                                 repeats:YES];
+
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--open-menu"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [self.statusItem popUpStatusItemMenu:self.menu];
+#pragma clang diagnostic pop
+        });
+    }
+}
+
+@end
+
+static RamletAppDelegate *delegate;
+
+int ramlet_run(void) {
+    @autoreleasepool {
+        NSApplication *application = [NSApplication sharedApplication];
+        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        delegate = [[RamletAppDelegate alloc] init];
+        application.delegate = delegate;
+        [application run];
+    }
+    return 0;
+}
+
+int ramlet_ui_self_test(void) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        id previousPreference = [defaults objectForKey:kIncludeUnattributedDefaultsKey];
+        [defaults setBool:YES forKey:kIncludeUnattributedDefaultsKey];
+
+        RamletAppDelegate *tester = [[RamletAppDelegate alloc] init];
+        tester.statusItem = [tester createStatusItem];
+        tester.menu = [[NSMenu alloc] initWithTitle:@"Ramlet"];
+        tester.menu.autoenablesItems = NO;
+        [tester refreshStatus:nil];
+        [tester menuNeedsUpdate:tester.menu];
+
+        BOOL hasSummary = NO;
+        BOOL hasApplicationWithIcon = NO;
+        BOOL hasCacheToggle = NO;
+        NSMenuItem *cacheToggleItem = nil;
+        BOOL hasRefresh = NO;
+        BOOL hasQuit = NO;
+        for (NSMenuItem *item in tester.menu.itemArray) {
+            if ([item.title containsString:@"utilisés sur"]) {
+                hasSummary = YES;
+            }
+            if ([item.title containsString:@"  ·  "] && item.image != nil) {
+                hasApplicationWithIcon = YES;
+            }
+            if ([item.title isEqualToString:@"Inclure caches et mémoire non attribuée"]) {
+                hasCacheToggle = YES;
+                cacheToggleItem = item;
+            }
+            if ([item.title isEqualToString:@"Actualiser maintenant"]) {
+                hasRefresh = YES;
+            }
+            if ([item.title isEqualToString:@"Quitter Ramlet"]) {
+                hasQuit = YES;
+            }
+        }
+
+        BOOL hasStatus = tester.statusItem.button.image != nil && tester.statusItem.button.title.length > 0;
+        NSImage *expectedOutlineIcon = [tester symbol:@"memorychip" description:@"Ramlet"];
+        NSData *actualIconData = tester.statusItem.button.image.TIFFRepresentation;
+        NSData *expectedIconData = expectedOutlineIcon.TIFFRepresentation;
+        BOOL hasOutlineStatusIcon = actualIconData != nil &&
+                                    expectedIconData != nil &&
+                                    [actualIconData isEqualToData:expectedIconData];
+        CGFloat originalWidth = tester.statusItem.length;
+        tester.statusItem.button.title = @" 8 Go";
+        CGFloat shortValueWidth = tester.statusItem.length;
+        tester.statusItem.button.title = @" 47,9 Go";
+        CGFloat longValueWidth = tester.statusItem.length;
+        BOOL hasFixedStatusWidth = originalWidth == kStatusItemWidth &&
+                                   shortValueWidth == kStatusItemWidth &&
+                                   longValueWidth == kStatusItemWidth;
+
+        BOOL toggleActionSent = cacheToggleItem != nil &&
+                                cacheToggleItem.action != NULL &&
+                                [NSApp sendAction:cacheToggleItem.action
+                                               to:cacheToggleItem.target
+                                             from:cacheToggleItem];
+        unsigned long long gibibyte = 1024ULL * 1024ULL * 1024ULL;
+        NSArray<NSArray<NSString *> *> *fixtureRows = @[@[
+            @"META",
+            [NSString stringWithFormat:@"%llu", 40ULL * gibibyte],
+            [NSString stringWithFormat:@"%llu", 48ULL * gibibyte],
+            @"0",
+            @"0",
+            @"0",
+            [NSString stringWithFormat:@"%llu", 20ULL * gibibyte],
+            [NSString stringWithFormat:@"%llu", 5ULL * gibibyte],
+            @"3",
+            @"0"
+        ]];
+        [tester updateStatusFromRows:fixtureRows];
+        NSString *attributedTitle = [NSString stringWithFormat:
+            @" %@", [tester memoryString:25ULL * gibibyte]];
+        BOOL toggleExcludesUnattributed = toggleActionSent &&
+                                          ![defaults boolForKey:kIncludeUnattributedDefaultsKey] &&
+                                          cacheToggleItem.state == NSControlStateValueOff &&
+                                          [tester.statusItem.button.title isEqualToString:attributedTitle] &&
+                                          [tester.statusItem.button.toolTip containsString:@"attribués"];
+
+        [[NSStatusBar systemStatusBar] removeStatusItem:tester.statusItem];
+        if (previousPreference != nil) {
+            [defaults setObject:previousPreference forKey:kIncludeUnattributedDefaultsKey];
+        } else {
+            [defaults removeObjectForKey:kIncludeUnattributedDefaultsKey];
+        }
+        return (hasStatus && hasOutlineStatusIcon && hasFixedStatusWidth && hasSummary && hasApplicationWithIcon && hasCacheToggle && toggleExcludesUnattributed && hasRefresh && hasQuit) ? 0 : 1;
+    }
+}
