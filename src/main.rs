@@ -348,6 +348,12 @@ pub extern "C" fn ramlet_snapshot_tsv() -> *mut c_char {
         .into_raw()
 }
 
+/// Frees a C string returned by [`ramlet_snapshot_tsv`].
+///
+/// # Safety
+///
+/// `value` must be null or a pointer previously returned by
+/// [`ramlet_snapshot_tsv`] and not already freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ramlet_string_free(value: *mut c_char) {
     if !value.is_null() {
@@ -418,5 +424,82 @@ mod tests {
         let payload = snapshot_tsv(&snapshot);
         assert!(payload.starts_with("META\t42\t48\t"));
         assert!(payload.contains("APP\t12\t3\t/Applications/App.app\tApp Name\n"));
+    }
+
+    fn strings_keys(path: &Path) -> std::collections::BTreeSet<String> {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let mut keys = std::collections::BTreeSet::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("/*") || line.starts_with("//") {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix('"') else {
+                continue;
+            };
+            let mut key = String::new();
+            let mut chars = rest.chars();
+            while let Some(ch) = chars.next() {
+                if ch == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        key.push(escaped);
+                    }
+                    continue;
+                }
+                if ch == '"' {
+                    break;
+                }
+                key.push(ch);
+            }
+            keys.insert(key);
+        }
+        keys
+    }
+
+    fn objc_localized_keys(source: &str) -> std::collections::BTreeSet<String> {
+        let mut keys = std::collections::BTreeSet::new();
+        let mut rest = source;
+        let marker = "RamletLocalizedString(@\"";
+        while let Some(start) = rest.find(marker) {
+            rest = &rest[start + marker.len()..];
+            if let Some(end) = rest.find('"') {
+                keys.insert(rest[..end].to_string());
+                rest = &rest[end + 1..];
+            } else {
+                break;
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn localization_tables_match_and_cover_the_ui() {
+        let macos = Path::new(env!("CARGO_MANIFEST_DIR")).join("macos");
+        let en = strings_keys(&macos.join("en.lproj/Localizable.strings"));
+        let fr = strings_keys(&macos.join("fr.lproj/Localizable.strings"));
+        let es = strings_keys(&macos.join("es.lproj/Localizable.strings"));
+        assert_eq!(en, fr, "French keys should match English");
+        assert_eq!(en, es, "Spanish keys should match English");
+        assert!(!en.is_empty(), "English string table should not be empty");
+
+        let menubar =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/menubar.m"))
+                .expect("menubar.m should be readable");
+        let used = objc_localized_keys(&menubar);
+        assert!(
+            !used.is_empty(),
+            "menubar.m should look up localized strings"
+        );
+        let missing: Vec<_> = used.difference(&en).cloned().collect();
+        assert!(
+            missing.is_empty(),
+            "string tables are missing keys used by the UI: {missing:?}"
+        );
+        let unused: Vec<_> = en.difference(&used).cloned().collect();
+        assert!(
+            unused.is_empty(),
+            "string tables contain unused keys: {unused:?}"
+        );
     }
 }

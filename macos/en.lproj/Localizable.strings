@@ -1,0 +1,29 @@
+/* English — source locale. Keys are the English UI strings. */
+
+"Ramlet — measurement unavailable" = "Ramlet — measurement unavailable";
+"Memory measurement unavailable" = "Memory measurement unavailable";
+"Ramlet — %@ used of %@ unified memory" = "Ramlet — %@ used of %@ unified memory";
+"Ramlet — %@ attributed to apps and services of %@ (%@ used in total)" = "Ramlet — %@ attributed to apps and services of %@ (%@ used in total)";
+"used" = "used";
+"attributed" = "attributed";
+"%@ %@ of %@" = "%@ %@ of %@";
+"Unified memory" = "Unified memory";
+"Compressed %@  ·  Wired %@  ·  Swap %@" = "Compressed %@  ·  Wired %@  ·  Swap %@";
+"%ld aggregated process" = "%ld aggregated process";
+"%ld aggregated processes" = "%ld aggregated processes";
+"%ld other application  ·  %@" = "%ld other application  ·  %@";
+"%ld other applications  ·  %@" = "%ld other applications  ·  %@";
+"Other applications" = "Other applications";
+"macOS and services  ·  %@" = "macOS and services  ·  %@";
+"System services" = "System services";
+"Caches and unattributed memory  ·  ≈ %@" = "Caches and unattributed memory  ·  ≈ %@";
+"Caches and unattributed memory" = "Caches and unattributed memory";
+"File cache, shared memory, GPU, and allocations that macOS does not cleanly attach to an application." = "File cache, shared memory, GPU, and allocations that macOS does not cleanly attach to an application.";
+"Include caches and unattributed memory" = "Include caches and unattributed memory";
+"Physical footprint per app · GPU included when attributable" = "Physical footprint per app · GPU included when attributable";
+"macOS does not publish a complete breakdown of unified GPU memory per application." = "macOS does not publish a complete breakdown of unified GPU memory per application.";
+"Refresh Now" = "Refresh Now";
+"Refresh" = "Refresh";
+"Open Activity Monitor" = "Open Activity Monitor";
+"Activity Monitor" = "Activity Monitor";
+"Quit Ramlet" = "Quit Ramlet";

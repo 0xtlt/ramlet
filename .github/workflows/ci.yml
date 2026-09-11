@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  test:
+    name: Test (${{ matrix.arch }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            self_test: true
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            self_test: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        if: matrix.arch == 'arm64'
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        if: matrix.arch == 'arm64'
+        run: cargo clippy --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+
+      - name: Run tests
+        if: matrix.self_test
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Compile tests
+        if: ${{ !matrix.self_test }}
+        run: cargo test --locked --target ${{ matrix.target }} --no-run
+
+      - name: Package app
+        run: bash scripts/package-macos.sh --release ${{ matrix.arch }}
+
+      - name: UI self-test
+        if: matrix.self_test
+        run: dist/Ramlet.app/Contents/MacOS/ramlet --self-test-ui
