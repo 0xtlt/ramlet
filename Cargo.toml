@@ -1,9 +1,17 @@
 [package]
 name = "ramlet"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A lightweight macOS menu bar unified-memory monitor"
 license = "MIT"
+authors = ["Thomas Tastet"]
+repository = "https://github.com/0xtlt/ramlet"
+homepage = "https://github.com/0xtlt/ramlet"
+readme = "README.md"
+keywords = ["macos", "memory", "menubar", "apple-silicon"]
+categories = ["os::macos-apis"]
+publish = false
 build = "build.rs"
 
 [profile.release]
